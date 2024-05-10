@@ -3,8 +3,14 @@ import torch.nn as nn
 import numpy as np
 from .spline import *
 
+'''
+Run one of my MNIST MLPs and save the output logits, making a dataset X (N, 10), Y (N, 10)
+Initialize LAN model as KAN, but only learning the activation on the nodes (so 10 splines only, 1 to 1)
+Train w/ MSE or BCELoss and check then what 10 activation functions did it learn (plot it)
+'''
 
-class KANLayer(nn.Module):
+
+class LANLayer(nn.Module):
     """
     KANLayer class
     
@@ -62,7 +68,7 @@ class KANLayer(nn.Module):
             unlock already locked activation functions
     """
 
-    def __init__(self, in_dim=3, out_dim=2, num=5, k=3, noise_scale=0.1, scale_base=1.0, scale_sp=1.0, base_fun=torch.nn.SiLU(), grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, device='cpu', LAN=False):
+    def __init__(self, in_dim=3, num=5, k=3, noise_scale=0.1, scale_base=1.0, scale_sp=1.0, base_fun=torch.nn.SiLU(), grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, device='cpu'):
         ''''
         initialize a KANLayer
         
@@ -94,8 +100,6 @@ class KANLayer(nn.Module):
                 If true, scale_base is trainable. Default: True.
             device : str
                 device
-            LAN: bool #MY CHANGE
-                LAN mode, learnable activation on the nodes instead of on the weights
             
         Returns:
         --------
@@ -107,17 +111,13 @@ class KANLayer(nn.Module):
         >>> (model.in_dim, model.out_dim)
         (3, 5)
         '''
-        super(KANLayer, self).__init__()
+        super(LANLayer, self).__init__()
         # size 
-        if not LAN: #CHANGED
-            self.out_dim = out_dim
-        else:
-            self.out_dim = 1
-        self.size = size = self.out_dim * in_dim #CHANGED
+        self.size = size = in_dim
+        self.out_dim = 1
         self.in_dim = in_dim
         self.num = num
         self.k = k
-        self.LAN = LAN
 
         # shape: (size, num)
         self.grid = torch.einsum('i,j->ij', torch.ones(size, device=device), torch.linspace(grid_range[0], grid_range[1], steps=num + 1, device=device))
@@ -171,21 +171,19 @@ class KANLayer(nn.Module):
          torch.Size([100, 5, 3]),
          torch.Size([100, 5, 3]))
         '''
-        batch = x.shape[0]
+        #batch = x.shape[0]
         # x: shape (batch, in_dim) => shape (size, batch) (size = out_dim * in_dim)
-        x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, device=self.device)).reshape(batch, self.size).permute(1, 0)
-        preacts = x.permute(1, 0).clone().reshape(batch, self.out_dim, self.in_dim)
-        base = self.base_fun(x).permute(1, 0)  # shape (batch, size)
-        y = coef2curve(x_eval=x, grid=self.grid[self.weight_sharing], coef=self.coef[self.weight_sharing], k=self.k, device=self.device)  # shape (size, batch)
+        #x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, device=self.device)).reshape(batch, self.size).permute(1, 0)
+        x = x.permute(1, 0)
+        preacts = x.clone()
+        base = self.base_fun(x)  # shape (batch, size)
+        y = coef2curve(x_eval=x.permute(1, 0), grid=self.grid[self.weight_sharing], coef=self.coef[self.weight_sharing], k=self.k, device=self.device)  # shape (size, batch)
         y = y.permute(1, 0)  # shape (batch, size)
-        postspline = y.clone().reshape(batch, self.out_dim, self.in_dim)
+        postspline = y.clone()
         y = self.scale_base.unsqueeze(dim=0) * base + self.scale_sp.unsqueeze(dim=0) * y
         y = self.mask[None, :] * y
-        postacts = y.clone().reshape(batch, self.out_dim, self.in_dim)
-        if not self.LAN: #CHANGED
-            y = torch.sum(y.reshape(batch, self.out_dim, self.in_dim), dim=2)  # shape (batch, out_dim)
-        # if LAN, don't sum the splines of each in dimensions. Cause these will be the outpu of each node
-
+        postacts = y.clone()
+        #y = torch.sum(y.reshape(batch, self.out_dim, self.in_dim), dim=2)  # shape (batch, out_dim)
         # y shape: (batch, out_dim); preacts shape: (batch, in_dim, out_dim)
         # postspline shape: (batch, in_dim, out_dim); postacts: (batch, in_dim, out_dim)
         # postspline is for extension; postacts is for visualization
@@ -215,8 +213,8 @@ class KANLayer(nn.Module):
         tensor([[-3.0002, -1.7882, -0.5763,  0.6357,  1.8476,  3.0002]])
         '''
         batch = x.shape[0]
-        x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
-        x_pos = torch.sort(x, dim=1)[0]
+        #x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
+        x_pos = torch.sort(x.permute(1,0), dim=1)[0] #(size/in_dim, batch)
         y_eval = coef2curve(x_pos, self.grid, self.coef, self.k, device=self.device)
         num_interval = self.grid.shape[1] - 1
         ids = [int(batch / num_interval * i) for i in range(num_interval)] + [-1]
@@ -258,7 +256,7 @@ class KANLayer(nn.Module):
         # preacts: shape (batch, in_dim) => shape (size, batch) (size = out_dim * in_dim)
         x_eval = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
         x_pos = parent.grid
-        sp2 = KANLayer(in_dim=1, out_dim=self.size, k=1, num=x_pos.shape[1] - 1, scale_base=0., device=self.device)
+        sp2 = LANLayer(in_dim=1, out_dim=self.size, k=1, num=x_pos.shape[1] - 1, scale_base=0., device=self.device)
         sp2.coef.data = curve2coef(sp2.grid, x_pos, sp2.grid, k=1, device=self.device)
         y_eval = coef2curve(x_eval, parent.grid, parent.coef, parent.k, device=self.device)
         percentile = torch.linspace(-1, 1, self.num + 1).to(self.device)
@@ -287,7 +285,7 @@ class KANLayer(nn.Module):
         >>> kanlayer_small.in_dim, kanlayer_small.out_dim
         (2, 3)
         '''
-        spb = KANLayer(len(in_id), len(out_id), self.num, self.k, base_fun=self.base_fun, device=self.device)
+        spb = LANLayer(len(in_id), len(out_id), self.num, self.k, base_fun=self.base_fun, device=self.device)
         spb.grid.data = self.grid.reshape(self.out_dim, self.in_dim, spb.num + 1)[out_id][:, in_id].reshape(-1, spb.num + 1)
         spb.coef.data = self.coef.reshape(self.out_dim, self.in_dim, spb.coef.shape[1])[out_id][:, in_id].reshape(-1, spb.coef.shape[1])
         spb.scale_base.data = self.scale_base.reshape(self.out_dim, self.in_dim)[out_id][:, in_id].reshape(-1, )

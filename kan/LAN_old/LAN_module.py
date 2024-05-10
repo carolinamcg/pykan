@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from .KANLayer import *
-from .Symbolic_KANLayer import *
+from .LANLayer import *
+from .Symbolic_LANLayer import *
 from .LBFGS import *
 import os
 import glob
@@ -10,43 +10,43 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import random
 import copy
-RESOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "figures")
 
-class KAN(nn.Module):
+
+class LAN(nn.Module):
     '''
-    KAN class
+    LAN class
     
     Attributes:
     -----------
         biases: a list of nn.Linear()
             biases are added on nodes (in principle, biases can be absorbed into activation functions. However, we still have them for better optimization)
-        act_fun: a list of KANLayer
-            KANLayers
+        act_fun: a list of LANLayer
+            LANLayers
         depth: int
-            depth of KAN
+            depth of LAN
         width: list
-            number of neurons in each layer. e.g., [2,5,5,3] means 2D inputs, 3D outputs, with 2 layers of 5 hidden neurons.
+            number of neurons in each layer. e.g., [2,5,5,3] means 2D inputs, 5D outputs, with 2 layers of 5 hidden neurons.
         grid: int
             the number of grid intervals
         k: int
             the order of piecewise polynomial
         base_fun: fun
             residual function b(x). an activation function phi(x) = sb_scale * b(x) + sp_scale * spline(x)
-        symbolic_fun: a list of Symbolic_KANLayer
-            Symbolic_KANLayers
+        symbolic_fun: a list of Symbolic_LANLayer
+            Symbolic_LANLayers
         symbolic_enabled: bool
             If False, the symbolic front is not computed (to save time). Default: True.
     
     Methods:
     --------
         __init__():
-            initialize a KAN
+            initialize a LAN
         initialize_from_another_model():
-            initialize a KAN from another KAN (with the same shape, but potentially different grids)
+            initialize a LAN from another LAN (with the same shape, but potentially different grids)
         update_grid_from_samples():
             update spline grids based on samples
         initialize_grid_from_another_model():
-            initalize KAN grids from another KAN
+            initalize LAN grids from another LAN
         forward():
             forward
         set_mode():
@@ -62,25 +62,25 @@ class KAN(nn.Module):
         get_range():
             get the input and output ranges of an activation function
         plot():
-            plot the diagram of KAN
+            plot the diagram of LAN
         train():
-            train KAN
+            train LAN
         prune():
-            prune KAN
+            prune LAN
         remove_edge():
-            remove some edge of KAN
+            remove some edge of LAN
         remove_node():
-            remove some node of KAN
+            remove some node of LAN
         auto_symbolic():
             automatically fit all splines to be symbolic functions
         symbolic_formula():
-            obtain the symbolic formula of the KAN network
+            obtain the symbolic formula of the LAN network
     '''
 
     def __init__(self, width=None, grid=3, k=3, noise_scale=0.1, noise_scale_base=0.1, base_fun=torch.nn.SiLU(), symbolic_enabled=True, bias_trainable=True, grid_eps=1.0, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True,
-                 device='cpu', seed=0, LAN=False):
+                 device='cpu', seed=0):
         '''
-        initalize a KAN model
+        initalize a LAN model
         
         Args:
         -----
@@ -110,8 +110,6 @@ class KAN(nn.Module):
                 device
             seed : int
                 random seed
-            LAN: bool #MY CHANGE
-                LAN mode, learnable activation on the nodes instead of on the weights
             
         Returns:
         --------
@@ -119,11 +117,11 @@ class KAN(nn.Module):
             
         Example
         -------
-        >>> model = KAN(width=[2,5,1], grid=5, k=3)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3)
         >>> (model.act_fun[0].in_dim, model.act_fun[0].out_dim), (model.act_fun[1].in_dim, model.act_fun[1].out_dim)
         ((2, 5), (5, 1))
         '''
-        super(KAN, self).__init__()
+        super(LAN, self).__init__()
 
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -135,20 +133,16 @@ class KAN(nn.Module):
         self.act_fun = []
         self.depth = len(width) - 1
         self.width = width
-        self.LAN = LAN
 
         for l in range(self.depth):
             # splines
-            if not LAN: #CHANGED
-                scale_base = 1 / np.sqrt(width[l]) + (torch.randn(width[l] * width[l + 1], ) * 2 - 1) * noise_scale_base
-            else:
-                scale_base = 1 / np.sqrt(width[l]) + (torch.randn(width[l], ) * 2 - 1) * noise_scale_base
-            sp_batch = KANLayer(in_dim=width[l], out_dim=width[l + 1], num=grid, k=k, noise_scale=noise_scale, scale_base=scale_base, scale_sp=1., base_fun=base_fun, grid_eps=grid_eps, grid_range=grid_range, sp_trainable=sp_trainable,
-                                sb_trainable=sb_trainable, device=device, LAN=LAN)
+            scale_base = 1 / np.sqrt(width[l]) + (torch.randn(width[l], ) * 2 - 1) * noise_scale_base
+            sp_batch = LANLayer(in_dim=width[l], num=grid, k=k, noise_scale=noise_scale, scale_base=scale_base, scale_sp=1., base_fun=base_fun, grid_eps=grid_eps, grid_range=grid_range, sp_trainable=sp_trainable,
+                                sb_trainable=sb_trainable, device=device)
             self.act_fun.append(sp_batch)
 
-            # bias
-            bias = nn.Linear(width[l + 1], 1, bias=False, device=device).requires_grad_(bias_trainable)
+            # bias - DO I WANT THIS?
+            bias = nn.Linear(width[l], 1, bias=False, device=device).requires_grad_(bias_trainable)
             bias.weight.data *= 0.
             self.biases.append(bias)
 
@@ -162,7 +156,7 @@ class KAN(nn.Module):
         ### initializing the symbolic front ###
         self.symbolic_fun = []
         for l in range(self.depth):
-            sb_batch = Symbolic_KANLayer(in_dim=width[l], out_dim=width[l + 1], device=device, LAN=LAN)
+            sb_batch = Symbolic_LANLayer(in_dim=width[l], out_dim=width[l + 1], device=device)
             self.symbolic_fun.append(sb_batch)
 
         self.symbolic_fun = nn.ModuleList(self.symbolic_fun)
@@ -177,19 +171,19 @@ class KAN(nn.Module):
         
         Args:
         -----
-            another_model : KAN
+            another_model : LAN
                 the parent model used to initialize the current model
             x : 2D torch.float
                 inputs, shape (batch, input dimension)
         
         Returns:
         --------
-            self : KAN
+            self : LAN
             
         Example
         -------
-        >>> model_coarse = KAN(width=[2,5,1], grid=5, k=3)
-        >>> model_fine = KAN(width=[2,5,1], grid=10, k=3)
+        >>> model_coarse = LAN(width=[2,5,1], grid=5, k=3)
+        >>> model_fine = LAN(width=[2,5,1], grid=10, k=3)
         >>> print(model_fine.act_fun[0].coef[0][0].data)
         >>> x = torch.normal(0,1,size=(100,2))
         >>> model_fine.initialize_from_another_model(model_coarse, x);
@@ -238,7 +232,7 @@ class KAN(nn.Module):
          
         Example
         -------
-        >>> model = KAN(width=[2,5,1], grid=5, k=3)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3)
         >>> print(model.act_fun[0].grid[0].data)
         >>> x = torch.rand(100,2)*5
         >>> model.update_grid_from_samples(x)
@@ -256,7 +250,7 @@ class KAN(nn.Module):
         
         Args:
         -----
-            model : KAN
+            model : LAN
                 parent model
             x : 2D torch.float
                 inputs, shape (batch, input dimension)
@@ -267,10 +261,10 @@ class KAN(nn.Module):
         
         Example
         -------
-        >>> model_parent = KAN(width=[1,1], grid=5, k=3)
+        >>> model_parent = LAN(width=[1,1], grid=5, k=3)
         >>> model_parent.act_fun[0].grid.data = torch.linspace(-2,2,steps=6)[None,:]
         >>> x = torch.linspace(-2,2,steps=1001)[:,None]
-        >>> model = KAN(width=[1,1], grid=5, k=3)
+        >>> model = LAN(width=[1,1], grid=5, k=3)
         >>> print(model.act_fun[0].grid.data)
         >>> model = model.initialize_from_another_model(model_parent, x)
         >>> print(model.act_fun[0].grid.data)
@@ -283,7 +277,7 @@ class KAN(nn.Module):
 
     def forward(self, x):
         '''
-        KAN forward
+        LAN forward
         ---> For each layer:
             1. Act_fun computes/learns the b() + spline() activation per in_neuron*out_neuron
             2. If symbolic enabled, symbolic_fun computes/learns 4 coefficients per in_neuron*out_neuron: c*f(a*x + b) + d
@@ -302,7 +296,7 @@ class KAN(nn.Module):
             
         Example
         -------
-        >>> model = KAN(width=[2,5,3], grid=5, k=3)
+        >>> model = LAN(width=[2,5,3], grid=5, k=3)
         >>> x = torch.normal(0,1,size=(100,2))
         >>> model(x).shape
         torch.Size([100, 3])
@@ -323,7 +317,7 @@ class KAN(nn.Module):
             x_numerical, preacts, postacts_numerical, postspline = self.act_fun[l](x)
             # act_fun learns each spline activation function per in_neuron*out_neuron
             # as a sum of G+k spline basis functions.
-            # x_numerical=final output of the KAN activation layer (batch, out_neurons)
+            # x_numerical=final output of the LAN activation layer (batch, out_neurons)
             # where out_neurons are the summed value of each input dim spline
 
             if self.symbolic_enabled == True:
@@ -335,15 +329,11 @@ class KAN(nn.Module):
                 postacts_symbolic = 0.
 
             x = x_numerical + x_symbolic
-            postacts = postacts_numerical + postacts_symbolic #(batch, out_neurons, in_neurons)
+            postacts = postacts_numerical + postacts_symbolic #(batch, in_neurons, out_neurons)
 
             # self.neurons_scale.append(torch.mean(torch.abs(x), dim=0))
-            if not self.LAN: #CHANGED
-                grid_reshape = self.act_fun[l].grid.reshape(self.width[l + 1], self.width[l], -1)
-                input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4
-            else:
-                grid_reshape = self.act_fun[l].grid.reshape(1, self.width[l], -1)
-                input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4
+            grid_reshape = self.act_fun[l].grid#.reshape(self.width[l + 1], self.width[l], -1)
+            input_range = grid_reshape[:, -1] - grid_reshape[:, 0] + 1e-4
             output_range = torch.mean(torch.abs(postacts), dim=0)
             self.acts_scale.append(output_range / input_range)
             self.acts_scale_std.append(torch.std(postacts, dim=0))
@@ -428,7 +418,7 @@ class KAN(nn.Module):
         Example 1 
         ---------
         >>> # when fit_params_bool = False
-        >>> model = KAN(width=[2,5,1], grid=5, k=3)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3)
         >>> model.fix_symbolic(0,1,3,'sin',fit_params_bool=False)
         >>> print(model.act_fun[0].mask.reshape(2,5))
         >>> print(model.symbolic_fun[0].mask.reshape(2,5))
@@ -440,7 +430,7 @@ class KAN(nn.Module):
         Example 2
         ---------
         >>> # when fit_params_bool = True
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=1.)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=1.)
         >>> x = torch.normal(0,1,size=(100,2))
         >>> model(x) # obtain activations (otherwise model does not have attributes acts)
         >>> model.fix_symbolic(0,1,3,'sin',fit_params_bool=True)
@@ -495,7 +485,7 @@ class KAN(nn.Module):
          
         Example
         -------
-        >>> model = KAN(width=[2,3,1], grid=5, k=3, noise_scale=1.)
+        >>> model = LAN(width=[2,3,1], grid=5, k=3, noise_scale=1.)
         >>> print(model.act_fun[0].weight_sharing.reshape(3,2))
         >>> model.lock(0,[[1,0],[1,1]])
         >>> print(model.act_fun[0].weight_sharing.reshape(3,2))
@@ -521,7 +511,7 @@ class KAN(nn.Module):
             
         Example:
         --------
-        >>> model = KAN(width=[2,3,1], grid=5, k=3, noise_scale=1.)
+        >>> model = LAN(width=[2,3,1], grid=5, k=3, noise_scale=1.)
         >>> model.lock(0,[[1,0],[1,1]])
         >>> print(model.act_fun[0].weight_sharing.reshape(3,2))
         >>> model.unlock(0,[[1,0],[1,1]])
@@ -561,7 +551,7 @@ class KAN(nn.Module):
         
         Example
         -------
-        >>> model = KAN(width=[2,3,1], grid=5, k=3, noise_scale=1.)
+        >>> model = LAN(width=[2,3,1], grid=5, k=3, noise_scale=1.)
         >>> x = torch.normal(0,1,size=(100,2))
         >>> model(x) # do a forward pass to obtain model.acts
         >>> model.get_range(0,0,0)
@@ -569,7 +559,7 @@ class KAN(nn.Module):
         y range: [-0.50 , 1.83 ]
         (tensor(-2.1288), tensor(2.7498), tensor(-0.5042), tensor(1.8275))
         '''
-        x = self.spline_preacts[l][:, j, i] # the input x to teh layer reshaped to (batch, self.out_dim, self.in_dim)
+        x = self.spline_preacts[l][:, j, i]
         y = self.spline_postacts[l][:, j, i]
         x_min = torch.min(x)
         x_max = torch.max(x)
@@ -580,215 +570,7 @@ class KAN(nn.Module):
             print('y range: [' + '%.2f' % y_min, ',', '%.2f' % y_max, ']')
         return x_min, x_max, y_min, y_max
 
-    def plot(self, folder="./figures", beta=3, mask=False, mode="supervised", scale=0.5, tick=False, sample=False, in_vars=None, out_vars=None, title=None, plot_full=True):
-        '''
-        plot KAN
-        
-        Args:
-        -----
-            folder : str
-                the folder to store pngs
-            beta : float
-                positive number. control the transparency of each activation. transparency = tanh(beta*l1).
-            mask : bool
-                If True, plot with mask (need to run prune() first to obtain mask). If False (by default), plot all activation functions.
-            mode : bool
-                "supervised" or "unsupervised". If "supervised", l1 is measured by absolution value (not subtracting mean); if "unsupervised", l1 is measured by standard deviation (subtracting mean).
-            scale : float
-                control the size of the diagram
-            in_vars: None or list of str
-                the name(s) of input variables
-            out_vars: None or list of str
-                the name(s) of output variables
-            title: None or str
-                title
-            plot_full : bool
-                if True, plots the full model, with all spline/activation images together. Otherwise, just plots and saves the individual splines/activations
-            
-        Returns:
-        --------
-            Figure
-            
-        Example
-        -------
-        >>> # see more interactive examples in demos
-        >>> model = KAN(width=[2,3,1], grid=3, k=3, noise_scale=1.0)
-        >>> x = torch.normal(0,1,size=(100,2))
-        >>> model(x) # do a forward pass to obtain model.acts
-        >>> model.plot()
-        '''
-        assert not self.LAN, "This functions is for KAN, not LAN. Please, use the other plotting function"
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        # matplotlib.use('Agg')
-        depth = len(self.width) - 1
-        for l in range(depth):
-            w_large = 2.0
-            for i in range(self.width[l]):
-                for j in range(self.width[l + 1]):
-                    rank = torch.argsort(self.acts[l][:, i])
-                    fig, ax = plt.subplots(figsize=(w_large, w_large))
-
-                    num = rank.shape[0]
-
-                    symbol_mask = self.symbolic_fun[l].mask[j][i]
-                    numerical_mask = self.act_fun[l].mask.reshape(self.width[l + 1], self.width[l])[j][i]
-                    if symbol_mask > 0. and numerical_mask > 0.:
-                        color = 'purple'
-                        alpha_mask = 1
-                    if symbol_mask > 0. and numerical_mask == 0.:
-                        color = "red"
-                        alpha_mask = 1
-                    if symbol_mask == 0. and numerical_mask > 0.:
-                        color = "black"
-                        alpha_mask = 1
-                    if symbol_mask == 0. and numerical_mask == 0.:
-                        color = "white"
-                        alpha_mask = 0
-
-                    if tick == True:
-                        ax.tick_params(axis="y", direction="out", labelrotation=90, pad=3, labelsize=4)
-                        ax.tick_params(axis="x", direction="out", pad=1, labelsize=4)
-                        x_min, x_max, y_min, y_max = self.get_range(l, i, j, verbose=False)
-                        plt.xticks([x_min, x_max], ['%4.4f' % x_min, '%4.4f' % x_max])
-                        plt.yticks([y_min, y_max], ['%4.4f' % y_min, '%4.4f' % y_max])
-                    else:
-                        plt.xticks([])
-                        plt.yticks([])
-                    if alpha_mask == 1:
-                        plt.gca().patch.set_edgecolor('black')
-                    else:
-                        plt.gca().patch.set_edgecolor('white')
-                    plt.gca().patch.set_linewidth(1.5)
-                    # plt.axis('off')
-
-                    #self.acts[l] has the input x (batch, size) for layer l
-                    #self.spline_postacts[l] has its spline's outputs reshaped as (batch, out_dim, in_dim)
-                    plt.plot(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, lw=5)
-                    if sample == True:
-                        plt.scatter(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, s=400 * scale ** 2)
-                    plt.gca().spines[:].set_color(color)
-
-                    lock_id = self.act_fun[l].lock_id[j * self.width[l] + i].long().item()
-                    if lock_id > 0:
-                        # im = plt.imread(f'{folder}/lock.png')
-                        im = plt.imread(f'{RESOURCE_DIR}/lock.png')
-                        newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
-                        plt.text(500, 400, lock_id, fontsize=15)
-                        newax.imshow(im)
-                        newax.axis('off')
-
-                    plt.savefig(f'{folder}/sp_{l}_{i}_{j}.png', bbox_inches="tight", dpi=400)
-                    plt.close()
-
-        if plot_full:
-            def score2alpha(score):
-                return np.tanh(beta * score)
-
-            if mode == "supervised":
-                alpha = [score2alpha(score.cpu().detach().numpy()) for score in self.acts_scale]
-            elif mode == "unsupervised":
-                alpha = [score2alpha(score.cpu().detach().numpy()) for score in self.acts_scale_std]
-
-            # draw skeleton
-            width = np.array(self.width)
-            A = 1
-            y0 = 0.4  # 0.4
-
-            # plt.figure(figsize=(5,5*(neuron_depth-1)*y0))
-            neuron_depth = len(width)
-            min_spacing = A / np.maximum(np.max(width), 5)
-
-            max_neuron = np.max(width)
-            max_num_weights = np.max(width[:-1] * width[1:])
-            y1 = 0.4 / np.maximum(max_num_weights, 3)
-
-            fig, ax = plt.subplots(figsize=(10 * scale, 10 * scale * (neuron_depth - 1) * y0))
-            # fig, ax = plt.subplots(figsize=(5,5*(neuron_depth-1)*y0))
-
-            # plot scatters and lines
-            for l in range(neuron_depth):
-                n = width[l]
-                spacing = A / n
-                for i in range(n):
-                    plt.scatter(1 / (2 * n) + i / n, l * y0, s=min_spacing ** 2 * 10000 * scale ** 2, color='black')
-
-                    if l < neuron_depth - 1:
-                        # plot connections
-                        n_next = width[l + 1]
-                        N = n * n_next #if not self.LAN else N = n #CHANGED
-                        for j in range(n_next):
-                            id_ = i * n_next + j
-
-                            symbol_mask = self.symbolic_fun[l].mask[j][i]
-                            numerical_mask = self.act_fun[l].mask.reshape(self.width[l + 1], self.width[l])[j][i]
-                            if symbol_mask == 1. and numerical_mask == 1.:
-                                color = 'purple'
-                                alpha_mask = 1.
-                            if symbol_mask == 1. and numerical_mask == 0.:
-                                color = "red"
-                                alpha_mask = 1.
-                            if symbol_mask == 0. and numerical_mask == 1.:
-                                color = "black"
-                                alpha_mask = 1.
-                            if symbol_mask == 0. and numerical_mask == 0.:
-                                color = "white"
-                                alpha_mask = 0.
-                            if mask == True:
-                                plt.plot([1 / (2 * n) + i / n, 1 / (2 * N) + id_ / N], [l * y0, (l + 1 / 2) * y0 - y1], color=color, lw=2 * scale, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
-                                plt.plot([1 / (2 * N) + id_ / N, 1 / (2 * n_next) + j / n_next], [(l + 1 / 2) * y0 + y1, (l + 1) * y0], color=color, lw=2 * scale, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
-                            else:
-                                plt.plot([1 / (2 * n) + i / n, 1 / (2 * N) + id_ / N], [l * y0, (l + 1 / 2) * y0 - y1], color=color, lw=2 * scale, alpha=alpha[l][j][i] * alpha_mask)
-                                plt.plot([1 / (2 * N) + id_ / N, 1 / (2 * n_next) + j / n_next], [(l + 1 / 2) * y0 + y1, (l + 1) * y0], color=color, lw=2 * scale, alpha=alpha[l][j][i] * alpha_mask)
-
-                plt.xlim(0, 1)
-                plt.ylim(-0.1 * y0, (neuron_depth - 1 + 0.1) * y0)
-
-            # -- Transformation functions
-            DC_to_FC = ax.transData.transform
-            FC_to_NFC = fig.transFigure.inverted().transform
-            # -- Take data coordinates and transform them to normalized figure coordinates
-            DC_to_NFC = lambda x: FC_to_NFC(DC_to_FC(x))
-
-            plt.axis('off')
-
-            # plot splines
-            for l in range(neuron_depth - 1):
-                n = width[l]
-                for i in range(n):
-                    n_next = width[l + 1]
-                    N = n * n_next
-                    for j in range(n_next):
-                        id_ = i * n_next + j
-                        im = plt.imread(f'{folder}/sp_{l}_{i}_{j}.png')
-                        left = DC_to_NFC([1 / (2 * N) + id_ / N - y1, 0])[0]
-                        right = DC_to_NFC([1 / (2 * N) + id_ / N + y1, 0])[0]
-                        bottom = DC_to_NFC([0, (l + 1 / 2) * y0 - y1])[1]
-                        up = DC_to_NFC([0, (l + 1 / 2) * y0 + y1])[1]
-                        newax = fig.add_axes([left, bottom, right - left, up - bottom])
-                        # newax = fig.add_axes([1/(2*N)+id_/N-y1, (l+1/2)*y0-y1, y1, y1], anchor='NE')
-                        if mask == False:
-                            newax.imshow(im, alpha=alpha[l][j][i])
-                        else:
-                            ### make sure to run model.prune() first to compute mask ###
-                            newax.imshow(im, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
-                        newax.axis('off')
-
-            if in_vars != None:
-                n = self.width[0]
-                for i in range(n):
-                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.1, in_vars[i], fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
-
-            if out_vars != None:
-                n = self.width[-1]
-                for i in range(n):
-                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), y0 * (len(self.width) - 1) + 0.1, out_vars[i], fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
-
-            if title != None:
-                plt.gcf().get_axes()[0].text(0.5, y0 * (len(self.width) - 1) + 0.2, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
-
-
-    def plot_LAN(self, folder="./figures", beta=3, mask=False, mode="supervised", scale=0.5, tick=False, sample=False, in_vars=None, out_vars=None, title=None, plot_full=True):
+    def plot(self, folder="./figures", beta=3, mask=False, mode="supervised", scale=0.5, tick=False, sample=False, in_vars=None, out_vars=None, title=None):
         '''
         plot LAN
         
@@ -810,8 +592,6 @@ class KAN(nn.Module):
                 the name(s) of output variables
             title: None or str
                 title
-            plot_full : bool
-                if True, plots the full model, with all spline/activation images together. Otherwise, just plots and saves the individual splines/activations
             
         Returns:
         --------
@@ -820,12 +600,11 @@ class KAN(nn.Module):
         Example
         -------
         >>> # see more interactive examples in demos
-        >>> model = KAN(width=[2,3,1], grid=3, k=3, noise_scale=1.0)
+        >>> model = LAN(width=[2,3,1], grid=3, k=3, noise_scale=1.0)
         >>> x = torch.normal(0,1,size=(100,2))
         >>> model(x) # do a forward pass to obtain model.acts
         >>> model.plot()
         '''
-        assert self.LAN, "This is not a LAN model, use the other plot function"
         if not os.path.exists(folder):
             os.makedirs(folder)
         # matplotlib.use('Agg')
@@ -834,14 +613,13 @@ class KAN(nn.Module):
             w_large = 2.0
             for i in range(self.width[l]):
                 #for j in range(self.width[l + 1]):
-                j=0
                 rank = torch.argsort(self.acts[l][:, i])
                 fig, ax = plt.subplots(figsize=(w_large, w_large))
 
                 num = rank.shape[0]
 
-                symbol_mask = self.symbolic_fun[l].mask[j][i]
-                numerical_mask = self.act_fun[l].mask.reshape(1, self.width[l])[j][i]
+                symbol_mask = self.symbolic_fun[l].mask[i]
+                numerical_mask = self.act_fun[l].mask[i] #.reshape(self.width[l + 1], self.width[l])
                 if symbol_mask > 0. and numerical_mask > 0.:
                     color = 'purple'
                     alpha_mask = 1
@@ -856,11 +634,11 @@ class KAN(nn.Module):
                     alpha_mask = 0
 
                 if tick == True:
-                    ax.tick_params(axis="y", direction="out", labelrotation=90, pad=3, labelsize=4)
-                    ax.tick_params(axis="x", direction="out", pad=1, labelsize=4)
+                    ax.tick_params(axis="y", direction="in", pad=-22, labelsize=50)
+                    ax.tick_params(axis="x", direction="in", pad=-15, labelsize=50)
                     x_min, x_max, y_min, y_max = self.get_range(l, i, j, verbose=False)
-                    plt.xticks([x_min, x_max], ['%4.4f' % x_min, '%4.4f' % x_max])
-                    plt.yticks([y_min, y_max], ['%4.4f' % y_min, '%4.4f' % y_max])
+                    plt.xticks([x_min, x_max], ['%2.f' % x_min, '%2.f' % x_max])
+                    plt.yticks([y_min, y_max], ['%2.f' % y_min, '%2.f' % y_max])
                 else:
                     plt.xticks([])
                     plt.yticks([])
@@ -871,131 +649,126 @@ class KAN(nn.Module):
                 plt.gca().patch.set_linewidth(1.5)
                 # plt.axis('off')
 
-                plt.plot(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, lw=5)
+                plt.plot(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, i][rank].cpu().detach().numpy(), color=color, lw=5)
                 if sample == True:
-                    plt.scatter(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, s=400 * scale ** 2)
+                    plt.scatter(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, i][rank].cpu().detach().numpy(), color=color, s=400 * scale ** 2)
                 plt.gca().spines[:].set_color(color)
 
-                lock_id = self.act_fun[l].lock_id[j * self.width[l] + i].long().item()
-                if lock_id > 0:
-                    im = plt.imread(f'{folder}/lock.png')
-                    newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
-                    plt.text(500, 400, lock_id, fontsize=15)
-                    newax.imshow(im)
-                    newax.axis('off')
+                # lock_id = self.act_fun[l].lock_id[j * self.width[l] + i].long().item()
+                # if lock_id > 0:
+                #     im = plt.imread(f'{folder}/lock.png')
+                #     newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
+                #     plt.text(500, 400, lock_id, fontsize=15)
+                #     newax.imshow(im)
+                #     newax.axis('off')
 
-                plt.savefig(f'{folder}/sp_{l}_{i}_{j}.png', bbox_inches="tight", dpi=400)
+                plt.savefig(f'{folder}/sp_{l}_{i}.png', bbox_inches="tight", dpi=400)
                 plt.close()
 
-        if plot_full:
-            def score2alpha(score):
-                return np.tanh(beta * score)
+        # def score2alpha(score):
+        #     return np.tanh(beta * score)
 
-            if mode == "supervised":
-                alpha = [score2alpha(score.cpu().detach().numpy()) for score in self.acts_scale]
-            elif mode == "unsupervised":
-                alpha = [score2alpha(score.cpu().detach().numpy()) for score in self.acts_scale_std]
+        # if mode == "supervised":
+        #     alpha = [score2alpha(score.cpu().detach().numpy()) for score in self.acts_scale]
+        # elif mode == "unsupervised":
+        #     alpha = [score2alpha(score.cpu().detach().numpy()) for score in self.acts_scale_std]
 
-            # draw skeleton
-            width = np.array(self.width)
-            A = 1
-            y0 = 0.4  # 0.4
+        # # draw skeleton
+        # width = np.array(self.width)
+        # A = 1
+        # y0 = 0.4  # 0.4
 
-            # plt.figure(figsize=(5,5*(neuron_depth-1)*y0))
-            neuron_depth = len(width)
-            min_spacing = A / np.maximum(np.max(width), 5)
+        # # plt.figure(figsize=(5,5*(neuron_depth-1)*y0))
+        # neuron_depth = len(width)
+        # min_spacing = A / np.maximum(np.max(width), 5)
 
-            max_num_weights = np.max(width)
-            y1 = 0.4 / np.maximum(max_num_weights, 3)
+        # max_neuron = np.max(width)
+        # max_num_weights = np.max(width[:-1] * width[1:])
+        # y1 = 0.4 / np.maximum(max_num_weights, 3)
 
-            fig, ax = plt.subplots(figsize=(10 * scale, 10 * scale * (neuron_depth - 1) * y0))
-            # fig, ax = plt.subplots(figsize=(5,5*(neuron_depth-1)*y0))
+        # fig, ax = plt.subplots(figsize=(10 * scale, 10 * scale * (neuron_depth - 1) * y0))
+        # # fig, ax = plt.subplots(figsize=(5,5*(neuron_depth-1)*y0))
 
-            # plot scatters and lines
-            for l in range(neuron_depth):
-                n = width[l]
-                spacing = A / n
-                for i in range(n):
-                    plt.scatter(1 / (2 * n) + i / n, l * y0, s=min_spacing ** 2 * 10000 * scale ** 2, color='black')
+        # # plot scatters and lines
+        # for l in range(neuron_depth):
+        #     n = width[l]
+        #     spacing = A / n
+        #     for i in range(n):
+        #         plt.scatter(1 / (2 * n) + i / n, l * y0, s=min_spacing ** 2 * 10000 * scale ** 2, color='black')
 
-                    if l < neuron_depth - 1: # if it's not the last layer
-                        # plot connections
-                        n_next = width[l + 1]
-                        N = n
-                        #for j in range(n_next):
-                        j = 0
-                        id_ = i
+        #         if l < neuron_depth - 1:
+        #             # plot connections
+        #             n_next = width[l + 1]
+        #             N = n * n_next
+        #             for j in range(n_next):
+        #                 id_ = i * n_next + j
 
-                        symbol_mask = self.symbolic_fun[l].mask[0][i]
-                        numerical_mask = self.act_fun[l].mask.reshape(1, self.width[l])[j][i]
-                        if symbol_mask == 1. and numerical_mask == 1.:
-                            color = 'purple'
-                            alpha_mask = 1.
-                        if symbol_mask == 1. and numerical_mask == 0.:
-                            color = "red"
-                            alpha_mask = 1.
-                        if symbol_mask == 0. and numerical_mask == 1.:
-                            color = "black"
-                            alpha_mask = 1.
-                        if symbol_mask == 0. and numerical_mask == 0.:
-                            color = "white"
-                            alpha_mask = 0.
-                        if mask == True:
-                            plt.plot([1 / (2 * n) + i / n, 1 / (2 * N) + id_ / N], [l * y0, (l + 1 / 2) * y0 - y1], color=color, lw=2 * scale, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
-                            plt.plot([1 / (2 * N) + id_ / N, 1 / (2 * n_next) + id_ / n_next], [(l + 1 / 2) * y0 + y1, (l + 1) * y0], color=color, lw=2 * scale, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
-                        else:
-                            # plot connections from in_neurons (pre_activations) to spline functions
-                            plt.plot([1 / (2 * n) + i / n, 1 / (2 * N) + id_ / N], [l * y0, (l + 1 / 2) * y0 - y1], color=color, lw=2 * scale, alpha=alpha[l][j][i] * alpha_mask)
-                            # plot connections from spline functions to out_neurons (post_activations)
-                            plt.plot([1 / (2 * N) + id_ / N, 1 / (2 * n_next) + id_ / n_next], [(l + 1 / 2) * y0 + y1, (l + 1) * y0], color=color, lw=2 * scale, alpha=alpha[l][j][i] * alpha_mask)
+        #                 symbol_mask = self.symbolic_fun[l].mask[j][i]
+        #                 numerical_mask = self.act_fun[l].mask.reshape(self.width[l + 1], self.width[l])[j][i]
+        #                 if symbol_mask == 1. and numerical_mask == 1.:
+        #                     color = 'purple'
+        #                     alpha_mask = 1.
+        #                 if symbol_mask == 1. and numerical_mask == 0.:
+        #                     color = "red"
+        #                     alpha_mask = 1.
+        #                 if symbol_mask == 0. and numerical_mask == 1.:
+        #                     color = "black"
+        #                     alpha_mask = 1.
+        #                 if symbol_mask == 0. and numerical_mask == 0.:
+        #                     color = "white"
+        #                     alpha_mask = 0.
+        #                 if mask == True:
+        #                     plt.plot([1 / (2 * n) + i / n, 1 / (2 * N) + id_ / N], [l * y0, (l + 1 / 2) * y0 - y1], color=color, lw=2 * scale, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
+        #                     plt.plot([1 / (2 * N) + id_ / N, 1 / (2 * n_next) + j / n_next], [(l + 1 / 2) * y0 + y1, (l + 1) * y0], color=color, lw=2 * scale, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
+        #                 else:
+        #                     plt.plot([1 / (2 * n) + i / n, 1 / (2 * N) + id_ / N], [l * y0, (l + 1 / 2) * y0 - y1], color=color, lw=2 * scale, alpha=alpha[l][j][i] * alpha_mask)
+        #                     plt.plot([1 / (2 * N) + id_ / N, 1 / (2 * n_next) + j / n_next], [(l + 1 / 2) * y0 + y1, (l + 1) * y0], color=color, lw=2 * scale, alpha=alpha[l][j][i] * alpha_mask)
 
-                plt.xlim(0, 1)
-                plt.ylim(-0.1 * y0, (neuron_depth - 1 + 0.1) * y0)
+        #     plt.xlim(0, 1)
+        #     plt.ylim(-0.1 * y0, (neuron_depth - 1 + 0.1) * y0)
 
-            # -- Transformation functions
-            DC_to_FC = ax.transData.transform
-            FC_to_NFC = fig.transFigure.inverted().transform
-            # -- Take data coordinates and transform them to normalized figure coordinates
-            DC_to_NFC = lambda x: FC_to_NFC(DC_to_FC(x))
+        # # -- Transformation functions
+        # DC_to_FC = ax.transData.transform
+        # FC_to_NFC = fig.transFigure.inverted().transform
+        # # -- Take data coordinates and transform them to normalized figure coordinates
+        # DC_to_NFC = lambda x: FC_to_NFC(DC_to_FC(x))
 
-            plt.axis('off')
+        # plt.axis('off')
 
-            # plot splines
-            for l in range(neuron_depth - 1):
-                n = width[l]
-                for i in range(n):
-                    n_next = width[l + 1]
-                    N = n #NUMBER OF SPLINES/CONNECTIONS
-                    #for j in range(n_next):
-                    j = 0
-                    id_ = i
-                    im = plt.imread(f'{folder}/sp_{l}_{i}_{j}.png')
-                    left = DC_to_NFC([1 / (2 * N) + id_ / N - y1, 0])[0]
-                    right = DC_to_NFC([1 / (2 * N) + id_ / N + y1, 0])[0]
-                    bottom = DC_to_NFC([0, (l + 1 / 2) * y0 - y1])[1]
-                    up = DC_to_NFC([0, (l + 1 / 2) * y0 + y1])[1]
-                    newax = fig.add_axes([left, bottom, right - left, up - bottom])
-                    # newax = fig.add_axes([1/(2*N)+id_/N-y1, (l+1/2)*y0-y1, y1, y1], anchor='NE')
-                    if mask == False:
-                        newax.imshow(im, alpha=1) #alpha[l][j][i])
-                    else:
-                        ### make sure to run model.prune() first to compute mask ###
-                        newax.imshow(im, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
-                    newax.axis('off')
+        # # plot splines
+        # for l in range(neuron_depth - 1):
+        #     n = width[l]
+        #     for i in range(n):
+        #         n_next = width[l + 1]
+        #         N = n * n_next
+        #         for j in range(n_next):
+        #             id_ = i * n_next + j
+        #             im = plt.imread(f'{folder}/sp_{l}_{i}_{j}.png')
+        #             left = DC_to_NFC([1 / (2 * N) + id_ / N - y1, 0])[0]
+        #             right = DC_to_NFC([1 / (2 * N) + id_ / N + y1, 0])[0]
+        #             bottom = DC_to_NFC([0, (l + 1 / 2) * y0 - y1])[1]
+        #             up = DC_to_NFC([0, (l + 1 / 2) * y0 + y1])[1]
+        #             newax = fig.add_axes([left, bottom, right - left, up - bottom])
+        #             # newax = fig.add_axes([1/(2*N)+id_/N-y1, (l+1/2)*y0-y1, y1, y1], anchor='NE')
+        #             if mask == False:
+        #                 newax.imshow(im, alpha=alpha[l][j][i])
+        #             else:
+        #                 ### make sure to run model.prune() first to compute mask ###
+        #                 newax.imshow(im, alpha=alpha[l][j][i] * self.mask[l][i].item() * self.mask[l + 1][j].item())
+        #             newax.axis('off')
 
-            if in_vars != None:
-                n = self.width[0]
-                for i in range(n):
-                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.1, in_vars[i], fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
+        # if in_vars != None:
+        #     n = self.width[0]
+        #     for i in range(n):
+        #         plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.1, in_vars[i], fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
-            if out_vars != None:
-                n = self.width[-1]
-                for i in range(n):
-                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), y0 * (len(self.width) - 1) + 0.1, out_vars[i], fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
+        # if out_vars != None:
+        #     n = self.width[-1]
+        #     for i in range(n):
+        #         plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), y0 * (len(self.width) - 1) + 0.1, out_vars[i], fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
-            if title != None:
-                plt.gcf().get_axes()[0].text(0.5, y0 * (len(self.width) - 1) + 0.2, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
-
+        # if title != None:
+        #     plt.gcf().get_axes()[0].text(0.5, y0 * (len(self.width) - 1) + 0.2, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
     def train(self, dataset, opt="LBFGS", steps=100, log=1, lamb=0., lamb_l1=1., lamb_entropy=2., lamb_coef=0., lamb_coefdiff=0., update_grid=True, grid_update_num=10, loss_fn=None, lr=1., stop_grid_update_step=50, batch=-1,
               small_mag_threshold=1e-16, small_reg_factor=1., metrics=None, sglr_avoid=False, save_fig=False, in_vars=None, out_vars=None, beta=3, save_fig_freq=1, img_folder='./video', device='cpu'):
@@ -1050,7 +823,7 @@ class KAN(nn.Module):
         -------
         >>> # for interactive examples, please see demos
         >>> from utils import create_dataset
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
         >>> f = lambda x: torch.exp(torch.sin(torch.pi*x[:,[0]]) + x[:,[1]]**2)
         >>> dataset = create_dataset(f, n_var=2)
         >>> model.train(dataset, opt='LBFGS', steps=50, lamb=0.01);
@@ -1081,9 +854,7 @@ class KAN(nn.Module):
 
         pbar = tqdm(range(steps), desc='description', ncols=100)
 
-        loss_name = None #CHANGED
-        if loss_fn == None: #loss RMSE
-            loss_name = "RMSE" #CHANGED
+        if loss_fn == None:
             loss_fn = loss_fn_eval = lambda x, y: torch.mean((x - y) ** 2)
         else:
             loss_fn = loss_fn_eval = loss_fn
@@ -1166,13 +937,9 @@ class KAN(nn.Module):
                 for i in range(len(metrics)):
                     results[metrics[i].__name__].append(metrics[i]().item())
 
-            if loss_name == "RMSE":
-                results['train_loss'].append(torch.sqrt(train_loss).cpu().detach().item())
-                results['test_loss'].append(torch.sqrt(test_loss).cpu().detach().item())
-            else:
-                results['train_loss'].append(train_loss.cpu().detach().item())
-                results['test_loss'].append(test_loss.cpu().detach().item())
-            results['reg'].append(reg_.cpu().detach().item())
+            results['train_loss'].append(torch.sqrt(train_loss).cpu().detach().numpy())
+            results['test_loss'].append(torch.sqrt(test_loss).cpu().detach().numpy())
+            results['reg'].append(reg_.cpu().detach().numpy())
 
             if save_fig and _ % save_fig_freq == 0:
                 self.plot(folder=img_folder, in_vars=in_vars, out_vars=out_vars, title="Step {}".format(_), beta=beta)
@@ -1183,7 +950,7 @@ class KAN(nn.Module):
 
     def prune(self, threshold=1e-2, mode="auto", active_neurons_id=None):
         '''
-        pruning KAN on the node level. If a node has small incoming or outgoing connection, it will be pruned away.
+        pruning LAN on the node level. If a node has small incoming or outgoing connection, it will be pruned away.
         
         Args:
         -----
@@ -1196,14 +963,14 @@ class KAN(nn.Module):
             
         Returns:
         --------
-            model2 : KAN
+            model2 : LAN
                 pruned model
          
         Example
         -------
         >>> # for more interactive examples, please see demos
         >>> from utils import create_dataset
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
         >>> f = lambda x: torch.exp(torch.sin(torch.pi*x[:,[0]]) + x[:,[1]]**2)
         >>> dataset = create_dataset(f, n_var=2)
         >>> model.train(dataset, opt='LBFGS', steps=50, lamb=0.01);
@@ -1233,7 +1000,7 @@ class KAN(nn.Module):
                 if i not in active_neurons[l + 1]:
                     self.remove_node(l + 1, i)
 
-        model2 = KAN(copy.deepcopy(self.width), self.grid, self.k, base_fun=self.base_fun, device=self.device)
+        model2 = LAN(copy.deepcopy(self.width), self.grid, self.k, base_fun=self.base_fun, device=self.device)
         model2.load_state_dict(self.state_dict())
         for i in range(len(self.acts_scale)):
             if i < len(self.acts_scale) - 1:
@@ -1308,7 +1075,7 @@ class KAN(nn.Module):
             
         Example
         -------
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
         >>> f = lambda x: torch.exp(torch.sin(torch.pi*x[:,[0]]) + x[:,[1]]**2)
         >>> dataset = create_dataset(f, n_var=2)
         >>> model.train(dataset, opt='LBFGS', steps=50, lamb=0.01);
@@ -1369,7 +1136,7 @@ class KAN(nn.Module):
         ---------
         >>> # default library
         >>> from utils import create_dataset
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
         >>> f = lambda x: torch.exp(torch.sin(torch.pi*x[:,[0]]) + x[:,[1]]**2)
         >>> dataset = create_dataset(f, n_var=2)
         >>> model.train(dataset, opt='LBFGS', steps=50, lamb=0.01);
@@ -1384,7 +1151,7 @@ class KAN(nn.Module):
         ---------
         >>> # customized library
         >>> from utils import create_dataset
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0)
         >>> f = lambda x: torch.exp(torch.sin(torch.pi*x[:,[0]]) + x[:,[1]]**2)
         >>> dataset = create_dataset(f, n_var=2)
         >>> model.train(dataset, opt='LBFGS', steps=50, lamb=0.01);
@@ -1395,11 +1162,9 @@ class KAN(nn.Module):
         fixing (0,1,0) with x^2, r2=0.9962921738624573
         fixing (1,0,0) with exp, r2=0.9980258941650391
         '''
-        for l in range(len(self.width) - 1): #layers
-            for i in range(self.width[l]): #input neurons
-                for j in range(self.width[l + 1]): #output neurons
-                    if self.LAN and j>0: #CHANGED
-                        break
+        for l in range(len(self.width) - 1):
+            for i in range(self.width[l]):
+                for j in range(self.width[l + 1]):
                     if self.symbolic_fun[l].mask[j, i] > 0.:
                         print(f'skipping ({l},{i},{j}) since already symbolic')
                     else:
@@ -1431,7 +1196,7 @@ class KAN(nn.Module):
         
         Example
         -------
-        >>> model = KAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0, grid_eps=0.02)
+        >>> model = LAN(width=[2,5,1], grid=5, k=3, noise_scale=0.1, seed=0, grid_eps=0.02)
         >>> f = lambda x: torch.exp(torch.sin(torch.pi*x[:,[0]]) + x[:,[1]]**2)
         >>> dataset = create_dataset(f, n_var=2)
         >>> model.train(dataset, opt='LBFGS', steps=50, lamb=0.01);
@@ -1468,29 +1233,11 @@ class KAN(nn.Module):
 
         symbolic_acts.append(x)
 
-        if not self.LAN: ##CHANGED
-            for l in range(len(self.width) - 1):
-                y = []
-                for j in range(self.width[l + 1]): #each out_neuron has a symbolic expression
-                    yj = 0.
-                    for i in range(self.width[l]): #which is the sum of all in_neurons splines' expressions
-                        a, b, c, d = self.symbolic_fun[l].affine[j, i]
-                        sympy_fun = self.symbolic_fun[l].funs_sympy[j][i]
-                        try:
-                            yj += c * sympy_fun(a * x[i] + b) + d
-                        except:
-                            print('make sure all activations need to be converted to symbolic formulas first!')
-                            return
-                    if simplify == True:
-                        y.append(sympy.simplify(yj + self.biases[l].weight.data[0, j]))
-                    else:
-                        y.append(yj + self.biases[l].weight.data[0, j])
-        else:
-            for l in range(len(self.width) - 1):
-                y = []
-                for i in range(self.width[l]): #no sum, relation is 1-to-1 in LAN
-                    yj = 0.
-                    j = 0
+        for l in range(len(self.width) - 1):
+            y = []
+            for j in range(self.width[l + 1]):
+                yj = 0.
+                for i in range(self.width[l]):
                     a, b, c, d = self.symbolic_fun[l].affine[j, i]
                     sympy_fun = self.symbolic_fun[l].funs_sympy[j][i]
                     try:
@@ -1498,13 +1245,13 @@ class KAN(nn.Module):
                     except:
                         print('make sure all activations need to be converted to symbolic formulas first!')
                         return
-                    if simplify == True:
-                        y.append(sympy.simplify(yj + self.biases[l].weight.data[0, i]))
-                    else:
-                        y.append(yj + self.biases[l].weight.data[0, i])
+                if simplify == True:
+                    y.append(sympy.simplify(yj + self.biases[l].weight.data[0, j]))
+                else:
+                    y.append(yj + self.biases[l].weight.data[0, j])
 
-        x = y
-        symbolic_acts.append(x)
+            x = y
+            symbolic_acts.append(x)
 
         if output_normalizer != None:
             output_layer = symbolic_acts[-1]
@@ -1522,8 +1269,6 @@ class KAN(nn.Module):
         self.symbolic_acts = [[ex_round(symbolic_acts[l][i]) for i in range(len(symbolic_acts[l]))] for l in range(len(symbolic_acts))]
 
         out_dim = len(symbolic_acts[-1])
-        # x0 is a list of the names of each of the in_neurons/variables
-        # first output is a list of the symbolic expression in the last layer
         return [ex_round(symbolic_acts[-1][i]) for i in range(len(symbolic_acts[-1]))], x0
 
     def clear_ckpts(self, folder='./model_ckpt'):
