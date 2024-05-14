@@ -796,8 +796,7 @@ class KAN(nn.Module):
                         self.act_fun[l].lock_id[j * self.width[l] + i].long().item()
                     )
                     if lock_id > 0:
-                        # im = plt.imread(f'{folder}/lock.png')
-                        im = plt.imread(f'{RESOURCE_DIR}/lock.png')
+                        im = plt.imread(f"{folder}/lock.png")
                         newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
                         plt.text(500, 400, lock_id, fontsize=15)
                         newax.imshow(im)
@@ -1104,12 +1103,12 @@ class KAN(nn.Module):
                 plt.gca().spines[:].set_color(color)
 
                 lock_id = self.act_fun[l].lock_id[j * self.width[l] + i].long().item()
-                if lock_id > 0:
-                    im = plt.imread(f"{folder}/lock.png")
-                    newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
-                    plt.text(500, 400, lock_id, fontsize=15)
-                    newax.imshow(im)
-                    newax.axis("off")
+                # if lock_id > 0: #CHANGED
+                #     im = plt.imread(f"{folder}/lock.png")
+                #     newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
+                #     plt.text(500, 400, lock_id, fontsize=15)
+                #     newax.imshow(im)
+                #     newax.axis("off")
 
                 plt.savefig(
                     f"{folder}/sp_{l}_{i}_{j}.png", bbox_inches="tight", dpi=400

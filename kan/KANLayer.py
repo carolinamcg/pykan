@@ -137,7 +137,8 @@ class KANLayer(nn.Module):
         self.grid_eps = grid_eps
         self.weight_sharing = torch.arange(size)
         self.lock_counter = 0
-        self.lock_id = torch.zeros(size)
+        self.lock_id = torch.zeros(size) #set to 1 on the positions of the respective splines that were locked (sharing weights)
+                        # but this is just used then if we want to unlock them
         self.device = device
 
     def forward(self, x):
@@ -177,6 +178,10 @@ class KANLayer(nn.Module):
         preacts = x.permute(1, 0).clone().reshape(batch, self.out_dim, self.in_dim)
         base = self.base_fun(x).permute(1, 0)  # shape (batch, size)
         y = coef2curve(x_eval=x, grid=self.grid[self.weight_sharing], coef=self.coef[self.weight_sharing], k=self.k, device=self.device)  # shape (size, batch)
+        # spline that are sharing weights have the same index value in self.weight_sharing (shape=(out_dim, in_dim))
+        # if this happens, the initialized self.coef and self.grid positions that are not indexed in self.weight_sharing,
+        # won't be trained; and the same position/index of these will be trained to fit more than 1 weight --> sharing
+        # the same spline function
         y = y.permute(1, 0)  # shape (batch, size)
         postspline = y.clone().reshape(batch, self.out_dim, self.in_dim)
         y = self.scale_base.unsqueeze(dim=0) * base + self.scale_sp.unsqueeze(dim=0) * y
@@ -330,6 +335,8 @@ class KANLayer(nn.Module):
         for i in range(len(ids)):
             if i != 0:
                 self.weight_sharing[ids[i][1] * self.in_dim + ids[i][0]] = ids[0][1] * self.in_dim + ids[0][0]
+                # it makes the postion in self.weight_sharing correspondng to (x,j), with x=ids[i][0] and j =ids[i][j],
+                # have the same weight_sharing id has the first (x,j) pair on ids (ids[0])
             self.lock_id[ids[i][1] * self.in_dim + ids[i][0]] = self.lock_counter
 
     def unlock(self, ids):

@@ -6,12 +6,9 @@ from sklearn.model_selection import train_test_split
 from kan import *
 
 ##TODO:
-## BCE, than KAN w/ best, than gap+test, than compute symbolic expressions for best
 ## do symbolic for KAN too to see how each class correlates with each other. And check plots to see which ones are "regularized"
 
 ## Train with symbolic = False?
-## If I want to use BCELoss here, i have to use sigmoid before... cause it's inputs have to be between 0 and 1
-## Train w/ gaps as well know, wil labels all 0
 ## Should I learn the classifier layer as well w/ KAN?
 ## Learn the best combination between x and self.classifier? I can only think of this as making 10 vectors
 # of 2x the model_dim [x, class_vector] for class_vector in self.classifier for x in batch
@@ -19,18 +16,36 @@ from kan import *
 
 # NOTES:
 # 1. I'm using the conda env that I used to train my MLPs and get the (logits) dataset.
-# 2. I removed the classe nodes 1 and 9, since my MLPs were not trained with them, they won't ever be predicted 
+# 2. I removed the classe nodes 1 and 9, since my MLPs were not trained with them, they won't ever be predicted
 # and so won't appear on this dataset either.
 # 3. They say they use "RSME" loss when loss_fn is set to None, but they're actually training on the "MSE" loss value.
 # Only after the backward() pass they do the sqrt. (not sure why RMSE got much higher loss than MSE in my results. Might
-#                                                   it be the initialization? Or some better bakprop propertie of the pytorch MSE function?) 
+#                                                   it be the initialization? Or some better bakprop propertie of the pytorch MSE function?)
 
-def create_mydataset(data_dir, model_name):
-    assert os.path.exists(
-        os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt")
-    ), "You have to create the logits dataset for this model first!"
-    logits = torch.load(os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt"))
-    targets = torch.load(os.path.join(data_dir, f"{model_name}__Ylogitsdata.pt"))
+
+def create_mydataset(data_dir, model_name, w_gap=False):
+    if w_gap:
+        Xdata, Ydata = [], []
+        for filename in ["train_10000_", "cifar10_10000_"]:
+            assert os.path.exists(
+                os.path.join(data_dir, f"{model_name}__{filename}Xlogitsdata.pt")
+            ), "You have to create the logits dataset for this model first!"
+            x = torch.load(os.path.join(data_dir, f"{model_name}__{filename}Xlogitsdata.pt"))
+            y = torch.load(os.path.join(data_dir, f"{model_name}__{filename}Ylogitsdata.pt"))
+            if "cifar" in filename:
+                Xdata.append(x[:1000]) #for the dataset to be a litlle less unbalenced between 0 and 1
+                Ydata.append(y[:1000])
+            else:
+                Xdata.append(x)
+                Ydata.append(y)
+        logits, targets = stack_datasets(Xdata, Ydata)
+    else:
+        assert os.path.exists(
+            os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt")
+        ), "You have to create the logits dataset for this model first!"
+        logits = torch.load(os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt"))
+        targets = torch.load(os.path.join(data_dir, f"{model_name}__Ylogitsdata.pt"))
+
     X_train, X_test, y_train, y_test = train_test_split(
         logits, targets, test_size=0.2, random_state=42
     )
@@ -42,13 +57,20 @@ def create_mydataset(data_dir, model_name):
     return dataset
 
 
+def stack_datasets(datasets_Xlist, datasets_Ylist):
+    return torch.vstack(datasets_Xlist), torch.vstack(
+        datasets_Ylist
+    )
+
+
 def count_parameters(model):
-    total_params = 0
+    total_params, total_trainable_params = 0, 0
     for name, param in model.named_parameters():
         print(name, param.shape)
         total_params += param.flatten().shape[0]
-    return total_params
-
+        if param.requires_grad:
+            total_trainable_params += param.flatten().shape[0]
+    return total_params, total_trainable_params
 
 def train_acc():
     return torch.mean(
@@ -82,9 +104,10 @@ def save_loss_plot(results, save_dir):
     plt.savefig(os.path.join(save_dir, "loss.png"))
     plt.close()
 
+
 class Sin(nn.Module):
-  def forward(self, x):
-    return torch.sin(x)
+    def forward(self, x):
+        return torch.sin(x)
 
 
 losses = {
@@ -102,36 +125,51 @@ loss_fn_name = (
 criterion = losses[loss_fn_name]  # torch.nn.BCEWithLogitsLoss(reduction="mean")
 LAN = True  # if LAN is true, there are only n_classes edges (1 to 1 connections). Therefore,
 # not sparse regularixation should be done
+
+with_GAP = True  # train a dataset with normal imgs and gaps
+
 trials = {
     "model_names": ["Gonzalo_MLP4_SIGMOID_BCE"],
     "n_classes": 10 - 2,
-    "base_fun": [torch.nn.SiLU(), torch.nn.Tanh()], #[torch.nn.SiLU(), torch.nn.Sigmoid(), torch.nn.Tanh()],
+    "base_fun": [
+        #torch.nn.SiLU(),
+        torch.nn.Sigmoid(),
+        #torch.nn.Tanh(),
+        #Sin(),
+    ],  # [torch.nn.SiLU(), torch.nn.Sigmoid(), torch.nn.Tanh()],
     # trainable scales and bias?
     "LAN": LAN,
-    "grid": [10], #[10, 20],
-    "k": 8,  
-    "bias_trainable": False, # if this is false, the bias = 0
-    "sp_trainable": False, # if false, this is 1 (which multiplies by the spline(x))
-    "sb_trainable": False, # if false, this is 1 (which multiplies by the bx(x))
+    "grid": [20],  # [10, 20],
+    "k": 3,
+    "bias_trainable": False,  # if this is false, the bias = 0
+    "sp_trainable": False,  # if false, this is 1 (which multiplies by the spline(x))
+    "sb_trainable": False,  # if false, this is 1 (which multiplies by the bx(x))
+    "weight_sharing": True,
     "loss_fn": criterion,
-    "opt": ["Adam"], #"LBFGS", Adam
-    "grid_update_num": 10,
-    "lamb": 0.1, 
+    "opt": ["Adam"],  # "LBFGS", Adam
+    "grid_update_num": 20, #how many times you want to update the grid from samples
+    "stop_grid_update_step": 100, #at which step to stop updating the grid
+            # therefore, it updates the grid at 0 step and at every int(stop_grid_update_step/grid_update_num) steps 
+    "lamb": 0.1,
     "lamb_l1": 1,
     "lamb_entropy": 2,
 }
 
-trial_ini_number = 6
+trial_ini_number = 30
 
 if __name__ == "__main__":
 
     prefix = "" if LAN else "KAN_"
     for model_name in trials["model_names"]:
 
-        model_dir = os.path.join(os.getcwd(), f"results/{loss_fn_name}/{model_name}")
+        model_dir = (
+            os.path.join(os.getcwd(), f"results/{loss_fn_name}/{model_name}")
+            if not with_GAP
+            else os.path.join(os.getcwd(), f"results/{loss_fn_name}/{model_name}_wGAP")
+        )
         os.makedirs(model_dir, exist_ok=True)
 
-        dataset = create_mydataset(data_dir, model_name)
+        dataset = create_mydataset(data_dir, model_name, w_gap=with_GAP)
 
         trial_num = trial_ini_number
         for bx in trials["base_fun"]:
@@ -149,7 +187,13 @@ if __name__ == "__main__":
                     LAN=LAN,
                 )
 
-                print(f"Number of parameters: {count_parameters(model)}")
+                if trials["weight_sharing"] and LAN:
+                    ids_list = [[i, j] for j in range(1) for i in range(trials["n_classes"])]
+                    model.lock(0, ids_list) #layer 0
+
+                params, trainable_params = count_parameters(model)
+                print(f"Number of parameters: {params}; Number of trainable params: {trainable_params}")
+                # grid point values are not trainable params, but are updated from samples during training!!!!
 
                 # train
                 for optim in trials["opt"]:
@@ -157,9 +201,9 @@ if __name__ == "__main__":
                     save_dir = os.path.join(model_dir, f"{prefix}{str(trial_num)}")
                     os.makedirs(save_dir, exist_ok=True)
 
-                    steps = 100 #50 if optim == "LBFGS" else 100
+                    steps = 100  # 50 if optim == "LBFGS" else 100
                     print(f"Running model {model_name}, LAN={LAN}, trial={trial_num}")
-                    if LAN: #no sparsity reguçarization
+                    if LAN:  # no sparsity reguçarization
                         results = model.train(
                             dataset,
                             opt=optim,

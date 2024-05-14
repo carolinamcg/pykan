@@ -7,12 +7,36 @@ from sklearn.model_selection import train_test_split
 from sympy.printing.repr import srepr
 from kan import *
 
-def create_mydataset(data_dir, model_name):
-    assert os.path.exists(
-        os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt")
-    ), "You have to create the logits dataset for this model first!"
-    logits = torch.load(os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt"))
-    targets = torch.load(os.path.join(data_dir, f"{model_name}__Ylogitsdata.pt"))
+
+def create_mydataset(data_dir, model_name, w_gap=False):
+    if w_gap:
+        Xdata, Ydata = [], []
+        for filename in ["train_10000_", "cifar10_10000_"]:
+            assert os.path.exists(
+                os.path.join(data_dir, f"{model_name}__{filename}Xlogitsdata.pt")
+            ), "You have to create the logits dataset for this model first!"
+            x = torch.load(
+                os.path.join(data_dir, f"{model_name}__{filename}Xlogitsdata.pt")
+            )
+            y = torch.load(
+                os.path.join(data_dir, f"{model_name}__{filename}Ylogitsdata.pt")
+            )
+            if "cifar" in filename:
+                Xdata.append(
+                    x[:1000]
+                )  # for the dataset to be a litlle less unbalenced between 0 and 1
+                Ydata.append(y[:1000])
+            else:
+                Xdata.append(x)
+                Ydata.append(y)
+        logits, targets = stack_datasets(Xdata, Ydata)
+    else:
+        assert os.path.exists(
+            os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt")
+        ), "You have to create the logits dataset for this model first!"
+        logits = torch.load(os.path.join(data_dir, f"{model_name}__Xlogitsdata.pt"))
+        targets = torch.load(os.path.join(data_dir, f"{model_name}__Ylogitsdata.pt"))
+
     X_train, X_test, y_train, y_test = train_test_split(
         logits, targets, test_size=0.2, random_state=42
     )
@@ -22,6 +46,10 @@ def create_mydataset(data_dir, model_name):
     dataset["test_input"] = X_test
     dataset["test_label"] = y_test
     return dataset
+
+
+def stack_datasets(datasets_Xlist, datasets_Ylist):
+    return torch.vstack(datasets_Xlist), torch.vstack(datasets_Ylist)
 
 
 def get_best_trials(model, loss_fn):
@@ -45,7 +73,7 @@ def get_best_trials(model, loss_fn):
             loss = best_loss
             min_loss_trial = (trial, best_loss, results[f"{metric}_acc"][-1])
 
-    return max_acc_trial, min_loss_trial
+    return min_loss_trial, max_acc_trial
 
 
 def get_best_models(model_names, loss_names):
@@ -55,7 +83,7 @@ def get_best_models(model_names, loss_names):
         for loss_fn in loss_names:
             best_trials[model][loss_fn] = {"Acc": None, "Loss": None}
 
-            max_acc_trial, min_loss_trial = max_acc_trial, min_loss_trial
+            min_loss_trial, max_acc_trial = max_acc_trial, min_loss_trial
 
             best_trials[model][loss_fn][
                 "Acc"
@@ -66,30 +94,46 @@ def get_best_models(model_names, loss_names):
 
     return best_trials
 
+class Sin(nn.Module):
+    def forward(self, x):
+        return torch.sin(x)
+
 
 loss_names = ["MSE"]  # "RMSE",
 model_names = ["Gonzalo_MLP4_SIGMOID"]
 metric = "train"
 
-#symbolic 
+# symbolic
 loss = "MSE"
 model_name = "Gonzalo_MLP4_SIGMOID"
+with_GAP = True
 data_dir = "/home/carolina/Anansi/MA/KG/MNIST/data/logits_dataset/"
 
-base_act_fun = {"SiLU()": torch.nn.SiLU(), "Sigmoid()": torch.nn.Sigmoid(), "Tanh()": torch.nn.Tanh()}
+base_act_fun = {
+    "SiLU()": torch.nn.SiLU(),
+    "Sigmoid()": torch.nn.Sigmoid(),
+    "Tanh()": torch.nn.Tanh(),
+    "Sin()": Sin(),
+}
 
 if __name__ == "__main__":
-    #best_trials = get_best_trials(model_names, loss_names)
-    #print(best_trials)
+    # best_trials = get_best_trials(model_names, loss_names)
+    # print(best_trials)
 
     # load dataset to get the model's pre and post-spline activations in order
     # to compute the symbolic formulas that better approximate each learned activation
 
-    dataset = create_mydataset(data_dir, model_name)
+    dataset = create_mydataset(data_dir, model_name, w_gap=with_GAP)
 
     best_model_trials = get_best_trials(model_name, loss)
     for trial in best_model_trials:
-        trial_dir = os.path.join(os.getcwd(), f"results/{loss}/{model_name}/{trial[0]}")
+        trial_dir = (
+            os.path.join(os.getcwd(), f"results/{loss}/{model_name}/{trial[0]}")
+            if not with_GAP
+            else os.path.join(
+                os.getcwd(), f"results/{loss}/{model_name}_wGAP/{trial[0]}"
+            )
+        )
 
         args_dir = os.path.join(trial_dir, "args.json")  # args
         with open(os.path.join(trial_dir, "args.json"), "r") as fa:
@@ -110,11 +154,11 @@ if __name__ == "__main__":
             LAN=params["LAN"],
         )
 
-        model.load_ckpt('ckpt1', folder=trial_dir)
-        model(dataset['train_input'])
+        model.load_ckpt("ckpt1", folder=trial_dir)
+        model(dataset["train_input"])
 
         tini = time.time()
-        model.auto_symbolic() #lib=lib
+        model.auto_symbolic()  # lib=lib
         formulas, _ = model.symbolic_formula()
         tout = time.time()
         print(f"Auto-symbolic took {tout-tini}s")
@@ -160,4 +204,22 @@ Gonzalo_MLP4_SIGMOID, MSE, trial 10:
 0.5*tanh(0.16*x_7 - 0.08) + 0.5
 7:
 0.32*atan(1.66*x_8 + 0.14) + 0.5
+
+#'/home/carolina/Anansi/MA/KG/KAN/results/BCE/Gonzalo_MLP4_SIGMOID_BCE_wGAP/1'
+0:
+'10.87 - 21.38*sigmoid(0.06 - 0.18*x_1)'
+1:
+'11.82*tanh(0.14*x_2 - 0.25) + 0.79'
+2:
+'7.57*tanh(0.18*x_3 + 0.35) - 2.69'
+3:
+'1.97*relu(0.2*x_4 + 5.45) - 11.17'
+4:
+'10.97 - 22.08*sigmoid(0.19 - 0.32*x_5)'
+5:
+'21.31*sigmoid(0.18*x_6 - 0.17) - 10.3'
+6:
+'21.86*sigmoid(0.25*x_7 - 0.08) - 10.13'
+7:
+'23.15*sigmoid(0.16*x_8) - 11.38'
 """
