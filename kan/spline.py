@@ -97,7 +97,7 @@ def coef2curve(x_eval, grid, coef, k, device="cpu"):
     torch.Size([5, 100])
     '''
     # x_eval: (size, batch), grid: (size, grid), coef: (size, coef)
-    # coef: (size, coef), B_batch: (size, coef, batch), summer over coef
+    # coef: (size, coef=G+k), B_batch: (size, coef=G+k, batch), summer over coef
     if coef.dtype != x_eval.dtype:
         coef = coef.to(x_eval.dtype)
     y_eval = torch.einsum('ij,ijk->ik', coef, B_batch(x_eval, grid, k, device=device))
@@ -133,8 +133,8 @@ def curve2coef(x_eval, y_eval, grid, k, device="cpu"):
     torch.Size([5, 13])
     '''
     # x_eval: (size, batch); y_eval: (size, batch); grid: (size, grid); k: scalar
-    mat = B_batch(x_eval, grid, k, device=device).permute(0, 2, 1)
+    mat = B_batch(x_eval, grid, k, device=device).permute(0, 2, 1) #(size, G+k, batch) -> (size, batch, G+k)
     # coef = torch.linalg.lstsq(mat, y_eval.unsqueeze(dim=2)).solution[:, :, 0]
     coef = torch.linalg.lstsq(mat.to(device), y_eval.unsqueeze(dim=2).to(device),
                               driver='gelsy' if device == 'cpu' else 'gels').solution[:, :, 0]
-    return coef.to(device)
+    return coef.to(device) #size=(spline, G+k)

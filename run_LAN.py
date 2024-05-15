@@ -2,6 +2,7 @@ import os
 import torch
 import json
 import numpy as np
+import time
 from sklearn.model_selection import train_test_split
 from kan import *
 
@@ -10,9 +11,6 @@ from kan import *
 
 ## Train with symbolic = False?
 ## Should I learn the classifier layer as well w/ KAN?
-## Learn the best combination between x and self.classifier? I can only think of this as making 10 vectors
-# of 2x the model_dim [x, class_vector] for class_vector in self.classifier for x in batch
-# but this would take 4eveeeeer
 
 # NOTES:
 # 1. I'm using the conda env that I used to train my MLPs and get the (logits) dataset.
@@ -119,7 +117,7 @@ losses = {
 
 data_dir = "/home/carolina/Anansi/MA/KG/MNIST/data/logits_dataset/"
 loss_fn_name = (
-    "BCE"  # MSE loss has to be the same as the loss used to train the mlp (model_name)
+    "MSE"  # MSE loss has to be the same as the loss used to train the mlp (model_name)
 )
 # from which the logits dataset is made
 criterion = losses[loss_fn_name]  # torch.nn.BCEWithLogitsLoss(reduction="mean")
@@ -129,7 +127,7 @@ LAN = True  # if LAN is true, there are only n_classes edges (1 to 1 connections
 with_GAP = True  # train a dataset with normal imgs and gaps
 
 trials = {
-    "model_names": ["Gonzalo_MLP4_SIGMOID_BCE"],
+    "model_names": ["Gonzalo_MLP4_SIGMOID"],
     "n_classes": 10 - 2,
     "base_fun": [
         #torch.nn.SiLU(),
@@ -143,11 +141,11 @@ trials = {
     "k": 3,
     "bias_trainable": False,  # if this is false, the bias = 0
     "sp_trainable": False,  # if false, this is 1 (which multiplies by the spline(x))
-    "sb_trainable": False,  # if false, this is 1 (which multiplies by the bx(x))
-    "weight_sharing": True,
+    "sb_trainable": False,  # if false, this is set to scale_base (see KAN init) (which multiplies by the bx(x))
+    "allweights_sharing": True,
     "loss_fn": criterion,
     "opt": ["Adam"],  # "LBFGS", Adam
-    "grid_update_num": 20, #how many times you want to update the grid from samples
+    "grid_update_num": 100, #how many times you want to update the grid from samples
     "stop_grid_update_step": 100, #at which step to stop updating the grid
             # therefore, it updates the grid at 0 step and at every int(stop_grid_update_step/grid_update_num) steps 
     "lamb": 0.1,
@@ -155,7 +153,7 @@ trials = {
     "lamb_entropy": 2,
 }
 
-trial_ini_number = 30
+trial_ini_number = 33
 
 if __name__ == "__main__":
 
@@ -184,12 +182,13 @@ if __name__ == "__main__":
                     bias_trainable=trials["bias_trainable"],
                     sp_trainable=trials["sp_trainable"],
                     sb_trainable=trials["sb_trainable"],
+                    allweights_sharing=trials["allweights_sharing"],
                     LAN=LAN,
                 )
 
-                if trials["weight_sharing"] and LAN:
-                    ids_list = [[i, j] for j in range(1) for i in range(trials["n_classes"])]
-                    model.lock(0, ids_list) #layer 0
+                # if trials["weight_sharing"] and LAN:
+                #     ids_list = [[i, j] for j in range(1) for i in range(trials["n_classes"])]
+                #     model.lock(0, ids_list) #layer 0
 
                 params, trainable_params = count_parameters(model)
                 print(f"Number of parameters: {params}; Number of trainable params: {trainable_params}")
@@ -201,8 +200,9 @@ if __name__ == "__main__":
                     save_dir = os.path.join(model_dir, f"{prefix}{str(trial_num)}")
                     os.makedirs(save_dir, exist_ok=True)
 
-                    steps = 100  # 50 if optim == "LBFGS" else 100
+                    steps = 400  # 50 if optim == "LBFGS" else 100
                     print(f"Running model {model_name}, LAN={LAN}, trial={trial_num}")
+                    tini = time.time()
                     if LAN:  # no sparsity reguçarization
                         results = model.train(
                             dataset,
@@ -214,6 +214,7 @@ if __name__ == "__main__":
                             save_fig=False,
                             img_folder=save_dir,
                             grid_update_num=trials["grid_update_num"],
+                            stop_grid_update_step=trials["stop_grid_update_step"],
                             metrics=(train_acc, test_acc),
                         )
                     else:
@@ -230,8 +231,12 @@ if __name__ == "__main__":
                             save_fig=False,
                             img_folder=save_dir,
                             grid_update_num=trials["grid_update_num"],
+                            stop_grid_update_step=trials["stop_grid_update_step"],
                             metrics=(train_acc, test_acc),
                         )
+
+                    tout = time.time()
+                    print(f"Training time={tout-tini}s")
 
                     # save ckpt
                     model.save_ckpt("ckpt1", folder=save_dir)

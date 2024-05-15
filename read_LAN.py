@@ -148,9 +148,10 @@ if __name__ == "__main__":
             seed=0,
             base_fun=base_act_fun[params["base_fun"]],
             symbolic_enabled=True,
-            bias_trainable=False,
-            sp_trainable=False,
-            sb_trainable=False,
+            bias_trainable=params["bias_trainable"],
+            sp_trainable=params["sp_trainable"],
+            sb_trainable=params["sb_trainable"],
+            allweights_sharing=params["allweights_sharing"],
             LAN=params["LAN"],
         )
 
@@ -222,4 +223,16 @@ Gonzalo_MLP4_SIGMOID, MSE, trial 10:
 '21.86*sigmoid(0.25*x_7 - 0.08) - 10.13'
 7:
 '23.15*sigmoid(0.16*x_8) - 11.38'
+
+
+
+trial_dir = '/home/carolina/Anansi/MA/KG/KAN/results/MSE/Gonzalo_MLP4_SIGMOID_wGAP/33'
+0: 0.08*relu(0.2*x_1 + 7.5) - 0.02
+1: 0.05*relu(0.2*x_2 + 8.19) - 0.01
+2: 0.03*relu(0.2*x_3 + 10.0) - 0.02
+3: 0.07*relu(0.2*x_4 + 7.63) - 0.02
+4: 0.04*relu(0.2*x_5 + 8.91) - 0.02
+5: 0.04*relu(0.2*x_6 + 9.7) - 0.03
+6: 0.07*relu(0.2*x_7 + 7.61) - 0.02
+7: 0.67*tanh(0.03*x_8 - 0.2) + 0.64
 """

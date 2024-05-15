@@ -6,6 +6,8 @@ from .Symbolic_KANLayer import *
 from .LBFGS import *
 import os
 import glob
+import matplotlib
+matplotlib.use('Agg')  # Use the Agg backend for non-interactive plotting
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import random
@@ -93,6 +95,7 @@ class KAN(nn.Module):
         sb_trainable=True,
         device="cpu",
         seed=0,
+        allweights_sharing=False, #CHANGED
         LAN=False,
     ):
         """
@@ -193,6 +196,7 @@ class KAN(nn.Module):
                 sp_trainable=sp_trainable,
                 sb_trainable=sb_trainable,
                 device=device,
+                allweights_sharing=allweights_sharing, #CHANGED
                 LAN=LAN,
             )
             self.act_fun.append(sp_batch)
@@ -408,10 +412,13 @@ class KAN(nn.Module):
                 grid_reshape = self.act_fun[l].grid.reshape(
                     self.width[l + 1], self.width[l], -1
                 )
-                input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4
             else:
-                grid_reshape = self.act_fun[l].grid.reshape(1, self.width[l], -1)
-                input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4
+                #CHANGED
+                if self.act_fun[l].allweights_sharing: #allweights shared, one spline is learned for all neurons in LAN layer
+                    grid_reshape = self.act_fun[l].grid.unsqueeze(0)
+                else:
+                    grid_reshape = self.act_fun[l].grid.reshape(1, self.width[l], -1)
+            input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4
             output_range = torch.mean(torch.abs(postacts), dim=0)
             self.acts_scale.append(output_range / input_range)
             self.acts_scale_std.append(torch.std(postacts, dim=0))
