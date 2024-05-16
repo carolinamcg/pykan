@@ -25,8 +25,8 @@ def create_mydataset(data_dir, model_name, data_mode, w_gap=False):
         assert os.path.exists(
             os.path.join(data_dir, f"{model_name}__X{data_mode}data.pt")
         ), "You have to create the logits dataset for this model first!"
-        logits = torch.load(os.path.join(data_dir, f"{model_name}__X{data_mode}data.pt"))
-        targets = torch.load(os.path.join(data_dir, f"{model_name}__Y{data_mode}data.pt"))
+        logits = torch.load(os.path.join(data_dir, f"{model_name}__X{data_mode}data.pt"))[:1000]
+        targets = torch.load(os.path.join(data_dir, f"{model_name}__Y{data_mode}data.pt"))[:1000]
 
     X_train, X_test, y_train, y_test = train_test_split(
         logits, targets, test_size=0.2, random_state=42

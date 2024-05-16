@@ -16,10 +16,15 @@ from my_utils import *
 #   - learn a final LAN layer to add to the model as it is that can compute a final combination function
 #   between x and each class vector (how to implement this?)
 
+## Grid updates don't keep somme % of the previous grid points... they change everything according to 
+## the train batch at the moment of the update... Shouldn't this be changed to allow for a more smooth
+## training and to train better with batch!=-1, to not completely just forget the previous batches ????????????
+
+''' Metrics for BCEwithLogitsLoss() '''
 def train_f1(pred, target):
     return f1_score(
             target.flatten().cpu().numpy(),
-            torch.round(pred).flatten().detach().cpu().numpy(),
+            torch.sigmoid(pred).round().flatten().detach().cpu().numpy(),
             average="macro",
             zero_division=0.0,
         )
@@ -27,10 +32,40 @@ def train_f1(pred, target):
 def test_f1():
     return f1_score(
             dataset["test_label"].flatten().cpu().numpy(),
-            torch.round(model(dataset["test_input"])).flatten().detach().cpu().numpy(),
+            torch.sigmoid(model(dataset["test_input"])).round().flatten().detach().cpu().numpy(), #model(dataset["test_input"])
             average="macro",
             zero_division=0.0,
         )
+
+''' Metrics for the other loss function for with_GAP datasets'''
+def train_error(pred, target):
+    return torch.mean(
+        torch.abs(pred - target).float()
+        )
+
+def test_error():
+    return torch.mean(
+        torch.abs(model(dataset["test_input"]) - dataset["test_label"]).float()
+        )
+
+''' Metrics for the other loss function for non-gap datasets'''
+def train_acc(pred, target):
+    return torch.mean(
+        (
+            torch.round(pred).argmax(-1)
+            == target.argmax(-1)
+        ).float()
+    )
+
+def test_acc():
+    return torch.mean(
+        (
+            torch.round(model(dataset["test_input"])).argmax(-1)
+            == dataset["test_label"].argmax(-1)
+        ).float()
+    )
+
+
 
 losses = {
     "RMSE": None,
@@ -41,14 +76,14 @@ losses = {
 data_mode = "vecreps"
 data_dir = f"/home/carolina/Anansi/MA/KG/MNIST/data/{data_mode}_dataset/"
 loss_fn_name = (
-    "MSE"  # MSE loss has to be the same as the loss used to train the mlp (model_name)
+    "BCE"  # MSE loss has to be the same as the loss used to train the mlp (model_name)
 )
 # from which the logits dataset is made
 criterion = losses[loss_fn_name]  # torch.nn.BCEWithLogitsLoss(reduction="mean")
 with_GAP = False  # train a dataset with normal imgs and gaps
 
 trials = {
-    "model_names": ["Gonzalo_MLP4_SIGMOID"],
+    "model_names": ["Gonzalo_MLP4_SIGMOID_BCE"],
     "n_classes": 10 - 2,
     "base_fun": [
         torch.nn.SiLU(),
@@ -61,17 +96,19 @@ trials = {
     #"grid_eps": 1, #controls how much the grid gets updated with a uniform grid between input_range 
                     #and (1-eps)*with actual G input_values from the batch
     "loss_fn": criterion,
-    "batch": -1,
+    "batch": 128,
     "opt": ["Adam"],  # "LBFGS", Adam
-    "grid_update_num": 10, #how many times you want to update the grid from samples
-    "stop_grid_update_step": 50, #at which step to stop updating the grid
+    "lr": 0.01,
+    "grid_update_num": 25, #how many times you want to update the grid from samples
+    "stop_grid_update_step": 100, #at which step to stop updating the grid
             # therefore, it updates the grid at 0 step and at every int(stop_grid_update_step/grid_update_num) steps 
-    "lamb": 0.1,
+    "lamb": 0.5,
     "lamb_l1": 1,
     "lamb_entropy": 2,
-    "steps": 100,
+    "steps": 10, #100, #epochs
 }
 
+#CHANGE MY UTILS DATASET FUNC
 trial_ini_number = 0
 
 if __name__ == "__main__":
@@ -91,7 +128,7 @@ if __name__ == "__main__":
         trial_num = trial_ini_number
         for bx in trials["base_fun"]:
             for num_grid_point in trials["grid"]:
-                model = ClassVecInteractor(
+                model = ClassVecConv(
                     grid=num_grid_point,
                     k=trials["k"],
                     base_fun=bx,
@@ -116,12 +153,22 @@ if __name__ == "__main__":
 
                     print(f"Running model {model_name}, trial={trial_num}")
                     if trials["batch"] != -1:
-                        trials["steps"] = trials["steps"] * int(dataset["train_input"].shape[0]/trials["batch"])
+                        steps = trials["steps"] * int(dataset["train_input"].shape[0]/trials["batch"])
+
+                    if loss_fn_name=="BCE":
+                        metrics=(train_f1, test_f1) 
+                    elif with_GAP:
+                        metrics=(train_error, test_error)
+                    else:
+                        metrics=(train_acc, test_acc)
+                    trials["metrics"] = (metrics[0].__name__, metrics[1].__name__)
+
                     tini = time.time()
                     results = model.train(
                         dataset,
                         opt=optim,
-                        steps=trials["steps"],
+                        lr=trials["lr"],
+                        steps=steps,
                         batch=trials["batch"],
                         loss_fn=trials["loss_fn"],
                         lamb=trials["lamb"],
@@ -132,7 +179,7 @@ if __name__ == "__main__":
                         img_folder=save_dir,
                         grid_update_num=trials["grid_update_num"],
                         stop_grid_update_step=trials["stop_grid_update_step"],
-                        metrics=(train_f1, test_f1),
+                        metrics=metrics,
                     )
                     tout = time.time()
                     print(f"Training time={tout-tini}s")
@@ -145,6 +192,7 @@ if __name__ == "__main__":
                     args["base_fun"] = str(bx)
                     args["grid"] = num_grid_point
                     args["opt"] = optim
+                    args["steps"] = steps
                     args["loss_fn"] = loss_fn_name
                     with open(os.path.join(save_dir, "args.json"), "w") as f:
                         json.dump(args, f, indent=4)  # 'indent=4' for pretty printing
