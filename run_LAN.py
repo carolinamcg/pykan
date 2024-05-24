@@ -19,7 +19,12 @@ from kan import *
 # 3. They say they use "RSME" loss when loss_fn is set to None, but they're actually training on the "MSE" loss value.
 # Only after the backward() pass they do the sqrt. (not sure why RMSE got much higher loss than MSE in my results. Might
 #                                                   it be the initialization? Or some better bakprop propertie of the pytorch MSE function?)
-
+# 4. Grid updates are done based on the batch input of that respective KANLayer, nothing more. So, when batch=-1,
+# the grid updates are redundant for 1 layer only KAN, cause each update takes the range of the full training dataset
+# thus leading to the same grid values every fucking time.
+# 5. BATCHING: leads to unstable loss plots and worse metrics and loss values than batch=-1, the latter not being true 
+# for when all_weight_sharing=True. Maybe, because that one is a simpler problem (only 1 grid is learned).
+# It does not give nans though.
 
 def create_mydataset(data_dir, model_name, w_gap=False):
     if w_gap:
@@ -60,7 +65,6 @@ def stack_datasets(datasets_Xlist, datasets_Ylist):
         datasets_Ylist
     )
 
-
 def count_parameters(model):
     total_params, total_trainable_params = 0, 0
     for name, param in model.named_parameters():
@@ -77,7 +81,6 @@ def train_acc():
             == dataset["train_label"].argmax(-1)
         ).float()
     )
-
 
 def test_acc():
     return torch.mean(
@@ -124,36 +127,37 @@ criterion = losses[loss_fn_name]  # torch.nn.BCEWithLogitsLoss(reduction="mean")
 LAN = True  # if LAN is true, there are only n_classes edges (1 to 1 connections). Therefore,
 # not sparse regularixation should be done
 
-with_GAP = True  # train a dataset with normal imgs and gaps
+with_GAP = False  # train a dataset with normal imgs and gaps
 
 trials = {
     "model_names": ["Gonzalo_MLP4_SIGMOID"],
     "n_classes": 10 - 2,
     "base_fun": [
-        #torch.nn.SiLU(),
+        torch.nn.SiLU(),
         torch.nn.Sigmoid(),
         #torch.nn.Tanh(),
         #Sin(),
     ],  # [torch.nn.SiLU(), torch.nn.Sigmoid(), torch.nn.Tanh()],
     # trainable scales and bias?
     "LAN": LAN,
-    "grid": [20],  # [10, 20],
+    "grid": [10],  # [10, 20],
     "k": 3,
     "bias_trainable": False,  # if this is false, the bias = 0
     "sp_trainable": False,  # if false, this is 1 (which multiplies by the spline(x))
     "sb_trainable": False,  # if false, this is set to scale_base (see KAN init) (which multiplies by the bx(x))
-    "allweights_sharing": True,
+    "allweights_sharing": False,
     "loss_fn": criterion,
-    "opt": ["Adam"],  # "LBFGS", Adam
-    "grid_update_num": 100, #how many times you want to update the grid from samples
-    "stop_grid_update_step": 100, #at which step to stop updating the grid
+    "opt": ["LBFGS"],  # "LBFGS", Adam
+    "batch": -1,
+    "grid_update_num": 10, #how many times you want to update the grid from samples
+    "stop_grid_update_step": 50, #at which step to stop updating the grid
             # therefore, it updates the grid at 0 step and at every int(stop_grid_update_step/grid_update_num) steps 
     "lamb": 0.1,
     "lamb_l1": 1,
     "lamb_entropy": 2,
 }
 
-trial_ini_number = 33
+trial_ini_number = 4
 
 if __name__ == "__main__":
 
@@ -208,7 +212,7 @@ if __name__ == "__main__":
                             dataset,
                             opt=optim,
                             steps=steps,
-                            batch=-1,
+                            batch=trials["batch"],
                             loss_fn=trials["loss_fn"],
                             update_grid=True,
                             save_fig=False,
@@ -222,7 +226,7 @@ if __name__ == "__main__":
                             dataset,
                             opt=optim,
                             steps=steps,
-                            batch=-1,
+                            batch=trials["batch"],
                             loss_fn=trials["loss_fn"],
                             lamb=trials["lamb"],
                             lamb_l1=trials["lamb_l1"],

@@ -290,7 +290,7 @@ class KANLayer(nn.Module):
         # postspline is for extension; postacts is for visualization
         return y, preacts, postacts, postspline
 
-    def update_grid_from_samples(self, x):
+    def update_grid_from_samples(self, x, epoch=-1, batch_updates=False): #CHANGED
         """
         update grid from samples
 
@@ -361,6 +361,11 @@ class KANLayer(nn.Module):
         self.grid.data = (
             self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
         ) #new grid will be updated to a grid_uniforms by eps and kept according to the input_range (non_uniform) by 1-eps
+        #CHANGED
+        # if epoch!=0 and batch_updates: 
+        #     self.grid.data = 0.8 * new_grid_data + (1 - 0.8)*self.grid.data
+        # else:
+        #     self.grid.data = new_grid_data
         self.coef.data = curve2coef(
             x_pos, y_eval, self.grid, self.k, device=self.device
         )

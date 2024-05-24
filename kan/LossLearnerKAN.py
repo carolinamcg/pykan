@@ -968,6 +968,7 @@ class LossLearnerLAN(nn.Module):
         dataset,
         opt="LBFGS",
         steps=100,
+        th_loss=0.5, #minimum difference between a pred and a target for the corresponding predicted loss value be minimized. If diff > th, it should be maximized
         log=1,
         lamb=0.0,
         lamb_l1=1.0,
@@ -976,7 +977,7 @@ class LossLearnerLAN(nn.Module):
         lamb_coefdiff=0.0,
         update_grid=True,
         grid_update_num=10,
-        loss_fn=None,
+        pred_acc_fn=None,
         lr=1.0,
         stop_grid_update_step=50,
         batch=-1,
@@ -1078,12 +1079,12 @@ class LossLearnerLAN(nn.Module):
 
         pbar = tqdm(range(steps), desc="description", ncols=100)
 
-        loss_name = None  # CHANGED
-        if loss_fn == None:  # loss RMSE
-            loss_name = "RMSE"  # CHANGED
-            loss_fn = loss_fn_eval = lambda x, y: torch.mean((x - y) ** 2)
+        pred_acc_name = None  # CHANGED
+        if pred_acc_fn == None:  # loss RMSE
+            pred_acc_name = "RMSE"  # CHANGED
+            pred_acc_fn = pred_acc_fn_eval = lambda x, y: torch.sqrt((x - y) ** 2)
         else:
-            loss_fn = loss_fn_eval = loss_fn
+            pred_acc_fn = pred_acc_fn_eval = pred_acc_fn
 
         grid_update_freq = int(stop_grid_update_step / grid_update_num)
 
@@ -1115,21 +1116,25 @@ class LossLearnerLAN(nn.Module):
             batch_size = batch
             batch_size_test = batch
 
-        global train_loss, reg_
+        global pred_acc, reg_
 
         def closure():
-            global train_loss, reg_
+            global pred_acc, reg_
             optimizer.zero_grad()
-            pred = self.forward(dataset["train_input"][train_id].to(device))
+            loss_pred = self.forward(dataset["train_input"][train_id].to(device))
+            pred = self.acts[0] 
             if sglr_avoid == True:
                 id_ = torch.where(torch.isnan(torch.sum(pred, dim=1)) == False)[0]
-                train_loss = loss_fn(
+                pred_acc = pred_acc_fn(
                     pred[id_], dataset["train_label"][train_id][id_].to(device)
                 )
             else:
-                train_loss = loss_fn(pred, dataset["train_label"][train_id].to(device))
+                pred_acc = pred_acc_fn(pred, dataset["train_label"][train_id].to(device)) #no reduction
+            
+            loss_pred[pred_acc > th_loss] *= -1 #when the acc of the predictions is low (high distance from gt), the loss should be maximized (=minimizing -loss)
             reg_ = reg(self.acts_scale)
-            objective = train_loss + lamb * reg_
+            #put some coefficients here?
+            objective = loss_pred.mean() + pred_acc.mean() + lamb * reg_
             objective.backward()
             return objective
 
@@ -1158,33 +1163,41 @@ class LossLearnerLAN(nn.Module):
                 optimizer.step(closure)
 
             if opt == "Adam":
-                pred = self.forward(dataset["train_input"][train_id].to(device))
+                loss_pred = self.forward(dataset["train_input"][train_id].to(device))
+                pred = self.acts[0]
                 if sglr_avoid == True:
                     id_ = torch.where(torch.isnan(torch.sum(pred, dim=1)) == False)[0]
-                    train_loss = loss_fn(
+                    pred_acc = pred_acc_fn(
                         pred[id_], dataset["train_label"][train_id][id_].to(device)
                     )
                 else:
-                    train_loss = loss_fn(
+                    pred_acc = pred_acc_fn(
                         pred, dataset["train_label"][train_id].to(device)
                     )
+                loss_pred[pred_acc > th_loss] *= -1 #when the acc of the predictions is low (high distance from gt), the loss should be maximized (=minimizing -loss)
                 reg_ = reg(self.acts_scale)
+                #put some coefficients here?
+                train_loss = loss_pred.mean() + pred_acc.mean() 
                 loss = train_loss + lamb * reg_
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            test_loss = loss_fn_eval(
-                self.forward(dataset["test_input"][test_id].to(device)),
+            test_loss_pred = self.forward(dataset["test_input"][test_id].to(device))
+            test_pred = self.acts[0]
+            pred_test_acc = pred_acc_fn_eval(
+                test_pred,
                 dataset["test_label"][test_id].to(device),
             )
+            test_loss_pred[pred_test_acc > th_loss] *= -1
+            test_loss = test_loss_pred.mean() + pred_test_acc.mean()
 
             if _ % log == 0:
                 pbar.set_description(
                     "train loss: %.2e | test loss: %.2e | reg: %.2e "
                     % (
-                        torch.sqrt(train_loss).cpu().detach().numpy(),
-                        torch.sqrt(test_loss).cpu().detach().numpy(),
+                        train_loss.cpu().detach().numpy(),
+                        test_loss.cpu().detach().numpy(),
                         reg_.cpu().detach().numpy(),
                     )
                 )
@@ -1193,14 +1206,8 @@ class LossLearnerLAN(nn.Module):
                 for i in range(len(metrics)):
                     results[metrics[i].__name__].append(metrics[i]().item())
 
-            if loss_name == "RMSE":
-                results["train_loss"].append(
-                    torch.sqrt(train_loss).cpu().detach().item()
-                )
-                results["test_loss"].append(torch.sqrt(test_loss).cpu().detach().item())
-            else:
-                results["train_loss"].append(train_loss.cpu().detach().item())
-                results["test_loss"].append(test_loss.cpu().detach().item())
+            results["train_loss"].append(train_loss.cpu().detach().item())
+            results["test_loss"].append(test_loss.cpu().detach().item())
             results["reg"].append(reg_.cpu().detach().item())
 
             if save_fig and _ % save_fig_freq == 0:
@@ -1278,7 +1285,7 @@ class LossLearnerLAN(nn.Module):
                 if i not in active_neurons[l + 1]:
                     self.remove_node(l + 1, i)
 
-        model2 = KAN(
+        model2 = LossLearnerLAN(
             copy.deepcopy(self.self.width),
             self.grid,
             self.k,

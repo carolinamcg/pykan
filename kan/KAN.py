@@ -1518,20 +1518,32 @@ class KAN(nn.Module):
                 loss.backward()
                 optimizer.step()
 
+            if torch.isnan(train_loss): #CHANGED
+                print(_)
             test_loss = loss_fn_eval(
                 self.forward(dataset["test_input"][test_id].to(device)),
                 dataset["test_label"][test_id].to(device),
             )
 
             if _ % log == 0:
-                pbar.set_description(
-                    "train loss: %.2e | test loss: %.2e | reg: %.2e "
-                    % (
-                        torch.sqrt(train_loss).cpu().detach().numpy(),
-                        torch.sqrt(test_loss).cpu().detach().numpy(),
-                        reg_.cpu().detach().numpy(),
+                if loss_name == "RMSE":
+                    pbar.set_description(
+                        "train loss: %.2e | test loss: %.2e | reg: %.2e "
+                        % (
+                            torch.sqrt(train_loss).cpu().detach().numpy(),
+                            torch.sqrt(test_loss).cpu().detach().numpy(),
+                            reg_.cpu().detach().numpy(),
+                        )
                     )
-                )
+                else:
+                    pbar.set_description(
+                        "train loss: %.2e | test loss: %.2e | reg: %.2e "
+                        % (
+                            train_loss.cpu().detach().numpy(),
+                            test_loss.cpu().detach().numpy(),
+                            reg_.cpu().detach().numpy(),
+                        )
+                    )
 
             if metrics != None:
                 for i in range(len(metrics)):
